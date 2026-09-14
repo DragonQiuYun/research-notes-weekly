@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="description" content="机器人、多传感器标定与跨模态配准学习记录">
+  <title>9.7~9.14 · Research Notes</title>
+  <link rel="stylesheet" href="../assets/style.css">
+</head>
+<body>
+<header class="site-header">
+  <div class="header-inner">
+    <a class="brand" href="../index.html">Research Notes <small>学习与汇报</small></a>
+    <nav class="nav">
+      <a href="../index.html" class="">首页</a>
+      <a href="../weeks/2026-09-07_09-14.html" class="active">9.7~9.14</a>
+      <button class="theme-btn" type="button" data-theme-toggle>深色</button>
+    </nav>
+  </div>
+</header>
+<main class="wrap">
+
+<div class="breadcrumb"><a href="../index.html">首页</a> / 9.7~9.14</div>
+<section class="hero" style="padding-top:0">
+  <div class="kicker">Weekly Report</div>
+  <h1>9.7~9.14</h1>
+  <p class="lead">本周重点：从“已有粗初值后的 Camera–LiDAR 外参优化”，逐步过渡到“Image + Point Cloud 不依赖外部初值的大范围位姿初始化”。</p>
+  <div class="meta">
+    <span class="badge">4 篇论文</span>
+    <span class="badge">Targetless Calibration</span>
+    <span class="badge">Cross-modal Correspondence</span>
+    <span class="badge">Pose Initialization</span>
+  </div>
+</section>
+
+<div class="layout" style="margin-top:36px">
+  <aside class="toc">
+    <div class="toc-title">本页目录</div>
+    <a href="#dlt">01 DLT-Line</a>
+    <a href="#flowcalib">02 FlowCalib</a>
+    <a href="#unicalib">03 UniCalib</a>
+    <a href="#icl">04 Implicit Correspondence</a>
+  </aside>
+
+  <article class="article">
+
+    <section id="dlt" class="paper">
+      <div class="section-label">Paper 01</div>
+      <h2><a class="paper-title" href="https://doi.org/10.1109/CCDC65474.2025.11090335" target="_blank" rel="noreferrer">Targetless Camera-LiDAR Calibration for Complex Port Environments Using DLT-Line Method</a></h2>
+      <div class="paper-sub">CCDC 2025（第 37 届 Chinese Control and Decision Conference） · 2025</div>
+
+      <div class="quick">这篇方法不重新训练标定网络，而是把图像和点云都转换成“直线”这种比较稳定的自然几何特征，再通过 2D 线与 3D 线之间的几何约束求外参。它的核心思路比较传统、可解释性强，但前提是需要一组已有的粗外参来帮助建立 2D/3D 线对应。</div>
+
+      <h3>整体操作</h3>
+      <ul>
+        <li><strong>输入：</strong>一帧相机图像、一组 LiDAR 点云、相机内参，以及一组已有的 Camera–LiDAR 初始外参。论文强调无标定板（Targetless），但并不是完全没有初值。</li>
+        <li><strong>图像侧处理：</strong>先利用相机内参进行去畸变，再使用轻量化线段检测器 M-LSD 提取 2D Line Segment。后续真正用于几何约束的是线的方向与线上一点，而不是线段长度本身。</li>
+        <li><strong>点云侧处理：</strong>先把点云划分为体素，在每个体素内用 RANSAC 反复拟合平面；随后根据整体几何结构进行自适应体素化，改善稀疏点云中平面被切碎的问题，最后从相邻平面的几何关系中提取深度连续的 3D Line。</li>
+        <li><strong>建立 2D–3D 线对应：</strong>利用初始外参把 3D Line 投影到图像平面，只保留落在相机视野内的候选线；再按照投影线与图像线之间的距离和方向差进行匹配。论文在港口实验中使用的阈值约为 20 pixel 和 3°。</li>
+        <li><strong>DLT-Line 求解：</strong>对于一对已经匹配好的 3D Line 与 2D Line，取 3D 线上的点 <code>P</code>，它经过外参和相机投影后必须落在对应的 2D 线上，因此可以写出 <code>lᵀπ(TP)=0</code>。多个线对就能堆叠成一个线性齐次方程组。</li>
+        <li><strong>得到最终外参：</strong>先对 2D/3D 数据做 Prenormalization，再通过 SVD 求 3×4 投影矩阵。由于线性解并不天然满足刚体变换约束，还要继续做尺度修正，并把左侧 3×3 矩阵正交化到合法的 SO(3)，最后得到 <code>R,t</code>。论文指出至少需要 6 组线对应，每条线至少提供两个点约束。</li>
+      </ul>
+
+      <h3>创新点</h3>
+      <ul>
+        <li>针对港口场景中“地面和集装箱大平面多、稳定点特征少”的特点，选择<strong>自然直线</strong>作为 Camera 与 LiDAR 的共同几何特征，减少对人工标定板和人工选点的依赖。</li>
+        <li>提出面向港口点云的<strong>自适应体素化</strong>方法，避免固定体素尺寸把一个完整平面切得过碎，从而提高后续 3D Line 提取的完整性和稳定性。</li>
+        <li>把线特征提取、粗外参辅助匹配和 DLT-Line 几何求解组合成一个单次静止数据即可运行的工程流程，计算过程比较透明，不需要训练专门的标定网络。</li>
+        <li>从论文定位上看，真正的新意主要集中在<strong>适合港口环境的 3D Line 提取与工程化组合</strong>，DLT-Line 本身属于成熟的几何求解工具。</li>
+      </ul>
+
+      <h3>参考点</h3>
+      <ul>
+        <li>跨模态对齐不一定非要直接比较 RGB Feature 和 Point Feature，可以先把两边转换成更接近的共同几何表示，例如 Line ↔ Line、Edge ↔ Edge。</li>
+        <li>这篇文章也暴露出一个很关键的问题：<strong>真正困难的往往不是最后如何求 <code>R,t</code>，而是没有可靠初值时，如何先建立正确的 2D–3D Correspondence。</strong></li>
+        <li>DLT-Line 可以作为轻量、可解释的几何后端；如果以后做无初值方法，可以把研究重点放到“全局找线对应/粗位姿”上，而不必重新设计整个求解器。</li>
+      </ul>
+    </section>
+
+    <section id="flowcalib" class="paper">
+      <div class="section-label">Paper 02</div>
+      <h2><a class="paper-title" href="https://doi.org/10.1109/TITS.2025.3627651" target="_blank" rel="noreferrer">FlowCalib: Targetless Infrastructure LiDAR-Camera Extrinsic Calibration Based on Optical Flow and Scene Flow</a></h2>
+      <div class="paper-sub">IEEE Transactions on Intelligent Transportation Systems（T-ITS，期刊） · 2026 年 1 月（在线发表：2025-11-10）</div>
+
+      <div class="quick">这篇文章没有重新训练一个“输入图像和点云、直接输出外参”的标定网络，而是利用现成的 Optical Flow 与 Scene Flow 方法，把道路上的车辆和行人当成天然的动态标定目标。它先根据运动实例得到一个可用的粗外参，再通过“位置一致 + 运动方向一致”继续做非线性优化。</div>
+
+      <h3>整体操作</h3>
+      <ul>
+        <li><strong>Camera 侧：</strong>输入相邻两帧图像，使用预训练 RAFT 估计 Optical Flow。光流给出了每个像素从上一帧到下一帧的二维运动，因此可以通过 Flow Magnitude 阈值把运动区域从静态背景中分离出来，再聚类成车辆、行人等运动实例。</li>
+        <li><strong>LiDAR 侧：</strong>输入相邻两帧点云，先处理地面，再使用 Neural Scene Flow Prior 估计 3D Scene Flow。Scene Flow 描述点在三维空间中的运动，同样可以根据运动幅值和空间聚类提取出对应的动态实例。</li>
+        <li><strong>构造共同观测：</strong>论文并不直接让每个像素和每个点一一匹配，而是把一个运动实例压缩成“实例中心 + 运动向量”。这样 Camera 和 LiDAR 虽然数据形式完全不同，却都可以描述同一个物体在哪里、往哪里运动。</li>
+        <li><strong>粗旋转估计：</strong>先根据 LiDAR 与 Camera 的平均观测方向做 Angle Alignment，通过向量夹角和叉乘构造一个初始旋转；随后仍有绕观测轴的一维旋转自由度，因此再沿 360° 进行采样并打分。</li>
+        <li><strong>局部 6DoF 搜索：</strong>在上一步粗旋转附近继续对 roll、pitch、yaw 以及 translation 做 Uniform Sampling，利用实例中心距离和运动方向一致性给候选外参打分，选出后续优化的 <code>T_init</code>。其中 Translation 并不是完全无限范围地搜索，论文仍依赖物理测量值或合理搜索范围。</li>
+        <li><strong>精标定：</strong>将 LiDAR 动态点投影到图像后，通过 KD-tree 等方式寻找最近的图像运动像素，形成 Instance Alignment Loss；同时把 3D Scene Flow 旋转到 Camera 坐标系并投影成 2D 运动，与 Optical Flow 的方向比较，形成 Flow Alignment Loss。</li>
+        <li><strong>迭代求解：</strong>把两类损失加权后交给 Ceres 做非线性优化，并在外参更新后重新建立对应关系，最终得到更精确的 <code>R,t</code>。</li>
+      </ul>
+
+      <h3>创新点</h3>
+      <ul>
+        <li>把道路上自然存在的<strong>运动目标</strong>作为无需人工布置的动态标定板，并且同时使用“物体的位置”和“物体的运动”两个跨模态共同物理量。</li>
+        <li>为路侧固定传感器专门设计了 Rough Calibration：先通过方向几何关系降低旋转搜索难度，再做局部 Uniform Sampling，比直接在完整 6DoF 空间暴力搜索更可行。</li>
+        <li>提出 Instance Alignment Loss + Flow Alignment Loss。位置约束告诉算法“同一个物体应该投到一起”，运动约束进一步告诉算法“同一个物体的运动方向也应该一致”，两者互补。</li>
+        <li>整个标定部分本身不是端到端新网络，而是<strong>预训练/现有 Flow 模型 + 聚类 + 几何搜索 + Ceres 优化</strong>的组合，工程解释性比较强。</li>
+      </ul>
+
+      <h3>参考点</h3>
+      <ul>
+        <li>Camera、LiDAR、Radar 都能观测“运动”，因此目标中心、速度、运动方向可能比颜色或纹理更适合作为多传感器共同特征。</li>
+        <li>这篇文章提供了很清楚的两阶段思路：<strong>先得到能收敛的粗初值，再做局部精化</strong>。后续如果研究大范围初始化，可以沿着这个框架继续扩展。</li>
+        <li>对于毫米波雷达，Doppler Velocity 本身就是非常直接的运动信息，因此 FlowCalib 的“运动一致性”思想值得重点迁移。</li>
+        <li>它的限制也很明确：依赖动态目标和较好的 Flow 估计，而且 Translation 仍需要合理先验，因此还不是完全无先验的全局 6DoF 标定。</li>
+      </ul>
+    </section>
+
+    <section id="unicalib" class="paper">
+      <div class="section-label">Paper 03</div>
+      <h2><a class="paper-title" href="https://openaccess.thecvf.com/content/WACV2026/html/Han_UniCalib_Targetless_LiDAR-camera_Calibration_via_Probabilistic_Flow_on_Unified_Depth_WACV_2026_paper.html" target="_blank" rel="noreferrer">UniCalib: Targetless LiDAR-camera Calibration via Probabilistic Flow on Unified Depth Representations</a></h2>
+      <div class="paper-sub">WACV 2026（IEEE/CVF Winter Conference on Applications of Computer Vision） · 2026</div>
+
+      <div class="quick">这篇工作是学习式方法，而且确实需要训练模型，但网络的任务不是直接回归外参。它先把 Camera 和 LiDAR 都转换成 Dense Depth，让原本的跨模态匹配变成 Depth ↔ Depth 的同模态匹配；网络预测“当前 LiDAR 投影位置应该在图像上移动多少”，再把修正后的 2D–3D 对应交给 PnP + RANSAC 求外参。</div>
+
+      <h3>整体操作</h3>
+      <ul>
+        <li><strong>输入与前提：</strong>输入 Camera RGB、LiDAR Point Cloud、相机内参以及一组粗外参 <code>T_init</code>。因此它解决的是“已有粗初值后的在线精化”，而不是完全从零开始寻找全局位姿。</li>
+        <li><strong>Camera 统一为深度：</strong>使用 MoGe 从单张 RGB 图像估计 Dense Depth Map。这样 Camera 原本的颜色/纹理信息被转换成更接近 LiDAR 的几何表示。</li>
+        <li><strong>LiDAR 统一为深度：</strong>用 <code>T_init</code> 把 LiDAR 点投到图像平面，得到 Sparse LiDAR Depth；之后通过 Depth Completion 补成 Dense Depth。由于补全区域可能产生错误，论文额外从原始 Sparse Depth 构建 Reliability Map，告诉网络哪些区域更可信。</li>
+        <li><strong>共享特征提取：</strong>Camera Depth 和 LiDAR Dense Depth 使用统一的 ResNet-34 Encoder，而不是分别设计两个完全不同的 Encoder。其目的就是缩小两种传感器之间的 Domain Gap。</li>
+        <li><strong>预测 Depth Flow：</strong>网络参考 SEA-RAFT 的迭代 Flow 估计方式，建立 4D Correlation Volume，并多次迭代更新。对一个由 <code>T_init</code> 投影得到的 LiDAR 点 <code>p</code>，真实外参对应的位置是 <code>p_gt</code>，训练目标就是二维位移 <code>f_gt = p_gt - p</code>。</li>
+        <li><strong>同时预测不确定性：</strong>网络不仅输出 Flow 均值 <code>μ=(Δu,Δv)</code>，还输出方差 <code>σ²</code> 和 Outlier Probability <code>α</code>。也就是说，它不仅告诉系统“应该往哪里移动”，还告诉系统“这条 Correspondence 到底靠不靠谱”。</li>
+        <li><strong>损失与可靠性：</strong>PWSF（Perceptually Weighted Sparse Flow）Loss 与 Reliability Map 一起降低遮挡、动态目标以及 Depth Completion 错误区域对训练的影响，避免所有对应关系被同等对待。</li>
+        <li><strong>最终几何求解：</strong>将当前投影像素加上预测的 <code>μ</code> 得到修正后的 2D 对应，与原始 3D LiDAR 点组成 2D–3D Correspondence，再通过 PnP + RANSAC 求 <code>R,t</code>。因此网络负责 Matching，几何算法负责 Pose。</li>
+      </ul>
+
+      <h3>创新点</h3>
+      <ul>
+        <li>把原本困难的 <strong>RGB ↔ Point Cloud Cross-modal Matching</strong> 改写成 <strong>Depth ↔ Depth Intra-modality Matching</strong>，先从表示层面减小模态差。</li>
+        <li>不直接回归外参，而是学习 2D–3D Correspondence，再交给 PnP 求 Pose。这样 Matching 与 Camera Parameters 解耦，相比纯回归式标定更容易保留几何可解释性。</li>
+        <li>把 Correspondence 从确定值扩展成概率描述，通过 <code>μ、σ²、α</code> 显式表达预测位移、预测不确定性和离群概率。</li>
+        <li>Reliability Map + PWSF Loss 专门处理 Depth Completion、动态物体与遮挡造成的“不可靠区域”，这是比单纯追求平均 Flow 精度更贴近真实标定场景的设计。</li>
+      </ul>
+
+      <h3>参考点</h3>
+      <ul>
+        <li>对于跨模态匹配，可以优先思考有没有办法构造<strong>共同表示空间</strong>，而不是一开始就强迫 Camera、LiDAR、Radar 原始 Feature 完全一致。</li>
+        <li>可以把网络定位为“Correspondence Generator”，把 <code>R,t</code> 求解留给 PnP、SVD 或 SE(3) 优化，这样网络和几何模块职责清楚，也方便分析失败原因。</li>
+        <li>后续自己的方法可以把 Confidence / Uncertainty 带入几何求解，例如对不同对应关系进行加权，而不是所有匹配点一视同仁。</li>
+        <li>UniCalib 的明显缺口是仍需要 <code>T_init</code> 才能先把 LiDAR 投到图像，因此若目标是“从 Image + Point Cloud 直接初始化”，还需要在它前面增加 Global Initialization / Overlap Search 模块。</li>
+      </ul>
+    </section>
+
+    <section id="icl" class="paper">
+      <div class="section-label">Paper 04</div>
+      <h2><a class="paper-title" href="https://openaccess.thecvf.com/content/CVPR2025/html/Li_Implicit_Correspondence_Learning_for_Image-to-Point_Cloud_Registration_CVPR_2025_paper.html" target="_blank" rel="noreferrer">Implicit Correspondence Learning for Image-to-Point Cloud Registration</a></h2>
+      <div class="paper-sub">CVPR 2025 · 2025</div>
+
+      <div class="quick">这篇文章与前三篇最大的区别是：它不要求外部提供一个可用的 <code>T_init</code>。输入 Image 与同一场景的 Point Cloud 后，网络先利用 Camera Frustum 的几何结构估计重叠区域和粗相机位姿，再用共享 Correspondence Query 隐式地产生成对 2D/3D Keypoint，最后通过 Pose Regression Module 得到更精确的相机位姿。</div>
+
+      <h3>整体操作</h3>
+      <ul>
+        <li><strong>基础特征：</strong>Image 使用 ResNet + FPN 提取二维特征 <code>F_I</code>，Point Cloud 使用 KPFCNN 提取三维点特征 <code>F_P</code>。此时两种 Feature 仍然属于不同模态，并没有直接要求它们数值相似。</li>
+        <li><strong>GPDM 第一步——粗判断重叠：</strong>先把整张图像特征平均成一个 Global Image Feature，与每个 Point Feature 拼接，用 MLP 预测每个 3D 点位于 Camera Frustum 内的概率。</li>
+        <li><strong>GPDM 第二步——加入几何先验：</strong>仅靠逐点分类容易得到零散、互相矛盾的可见点。论文进一步利用这些概率和 3D 坐标回归一个 Frustum Pose <code>T_f=(R_f,t_f)</code>，再真正用 Camera Projection 检查点是否落在图像范围且深度为正，从而得到更符合相机视锥结构的 Overlap Mask。</li>
+        <li><strong>ICLM——共享 Query：</strong>初始化一组可学习的 Correspondence Queries。每个 Query 先通过 Attention-Pixel 从图像特征中吸收信息，再通过 Attention-Point 从重叠点云特征中吸收信息，多轮交替后形成同时包含 2D 与 3D 信息的共享隐变量。</li>
+        <li><strong>隐式产生对应：</strong>同一个 Query 分别生成一个 2D Keypoint Detector 和一个 3D Keypoint Detector。Detector 与各自模态的 Feature 计算 Heatmap，再通过 Softmax 加权平均得到连续的 2D 像素坐标 <code>K_I</code> 和 3D 点坐标 <code>K_P</code>。因为二者来自同一个 Query Index，所以天然被视为一对 Correspondence。</li>
+        <li><strong>为什么叫 Implicit：</strong>传统方法通常显式计算 <code>F_I(u,v)</code> 与 <code>F_P(X,Y,Z)</code> 的两两相似度，再挑最大值做匹配；这里不直接做大规模 2D–3D Descriptor Matching，而是通过共享 Query 作为中介，让 Query 自己从两种模态中“选出”一对位置。</li>
+        <li><strong>Correspondence 监督：</strong>训练时利用 Ground-truth Pose，把预测 3D Keypoint 投到图像，要求它接近同一个 Query 产生的 2D Keypoint，即用 <code>L_corr</code> 强制二者真正对应；同时使用 Diversity Loss 防止所有 Query 都集中在同一区域。</li>
+        <li><strong>PRM 精化 Pose：</strong>最后把粗位姿 <code>T_f</code>、成对的 2D/3D Keypoint 以及 Detector Feature 融合，回归修正量 <code>ΔR,Δt</code>，直接对最终 Pose 进行监督。论文完整模型因此不再把 PnP-RANSAC 作为最终后处理。</li>
+      </ul>
+
+      <h3>创新点</h3>
+      <ul>
+        <li>Overlap Detection 不再只是独立地判断“这个点可见/不可见”，而是显式引入<strong>Camera Frustum 全局几何先验</strong>，把零散分类结果约束成一个合理的相机可见区域。</li>
+        <li>提出<strong>Implicit Correspondence Learning</strong>：不强迫 Image Feature 和 Point Feature 两两落到同一个描述子空间，而是通过共享 Query 分别与两种模态交互，再产生一对 2D/3D Keypoint。</li>
+        <li>同一个网络中同时包含 Coarse Pose / Overlap、Correspondence 和 Fine Pose 三个层次，形成比较完整的“Global → Local”配准路线。</li>
+        <li>通过 Pose Regression Module 让最终 Camera Pose 直接参与训练目标，同时通过 Correspondence Loss 和 Diversity Loss 保证中间对应关系既准确又具有一定空间分布。</li>
+      </ul>
+
+      <h3>参考点</h3>
+      <ul>
+        <li>对于真正缺少初始外参的问题，最值得借鉴的是<strong>先估 Overlap / Coarse Pose，再做 Fine Correspondence</strong>，而不是直接在全图与整幅点云之间做精细匹配。</li>
+        <li>共享 Query / Latent Slot 可以作为 Camera、LiDAR、Radar 之间的中介，让三种模态分别与同一组 Query 交互，而不是要求三种原始 Feature 强行一一对齐。</li>
+        <li>Correspondence 的质量不仅是“每一对是否正确”，还包括<strong>空间分布是否足够分散、是否具有可观测性</strong>。论文的 Diversity Loss 可以进一步发展成几何可观测性约束。</li>
+        <li>需要注意它虽然没有外部 <code>T_init</code>，但实验仍有明确的数据分布：KITTI 中主要考察地面平移范围和 yaw 的大范围错位，因此不能简单理解成任意 SE(3) 下完全无约束的全局注册。</li>
+      </ul>
+    </section>
+  </article>
+</div>
+
+</main>
+<footer class="footer"><div class="footer-inner">
+  静态学习记录站 · 当前收录 2026.9.7–9.14 · 后续可以继续按周扩展
+</div></footer>
+<script src="../assets/site.js"></script>
+</body>
+</html>
